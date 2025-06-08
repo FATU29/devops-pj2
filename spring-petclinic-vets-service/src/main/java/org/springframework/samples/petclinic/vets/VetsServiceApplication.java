@@ -33,3 +33,4 @@ public class VetsServiceApplication {
 		SpringApplication.run(VetsServiceApplication.class, args);
 	}
 }
+// Test CI pipeline - Sun Jun  8 09:55:00 PM +07 2025
