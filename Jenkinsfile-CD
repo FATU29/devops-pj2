@@ -1,4 +1,3 @@
-// Jenkinsfile-CD
 pipeline {
     agent any
     
@@ -15,14 +14,14 @@ pipeline {
     }
     
     environment {
-        DOCKER_USERNAME = credentials('dockerhub-credentials').username
+        DOCKER_USERNAME = 'fatu29'  // Thay bằng username Docker Hub của bạn
     }
     
     stages {
         stage('Determine Tags') {
             steps {
                 script {
-                    // Hàm để xác định tag cho một service
+                    // Hàm để xác định tag cho một service dựa trên branch
                     def getTagForBranch = { branchName ->
                         if (branchName == 'main') {
                             return 'latest'
@@ -32,7 +31,7 @@ pipeline {
                                 script: "git ls-remote origin ${branchName} | head -1 | cut -f 1 | cut -c1-7",
                                 returnStdout: true
                             ).trim()
-                            return commitHash
+                            return commitHash ?: 'latest'  // Fallback to latest if hash not found
                         }
                     }
                     
@@ -46,7 +45,8 @@ pipeline {
                     env.GENAI_SERVICE_TAG = getTagForBranch(params.GENAI_SERVICE_BRANCH)
                     env.ADMIN_SERVER_TAG = getTagForBranch(params.ADMIN_SERVER_BRANCH)
                     
-                    // Debug info
+                    // In thông tin debug
+                    echo "================ SERVICE TAGS ================"
                     echo "CONFIG_SERVER_TAG: ${env.CONFIG_SERVER_TAG}"
                     echo "DISCOVERY_SERVER_TAG: ${env.DISCOVERY_SERVER_TAG}"
                     echo "API_GATEWAY_TAG: ${env.API_GATEWAY_TAG}"
@@ -55,6 +55,7 @@ pipeline {
                     echo "VISITS_SERVICE_TAG: ${env.VISITS_SERVICE_TAG}"
                     echo "GENAI_SERVICE_TAG: ${env.GENAI_SERVICE_TAG}"
                     echo "ADMIN_SERVER_TAG: ${env.ADMIN_SERVER_TAG}"
+                    echo "=============================================="
                 }
             }
         }
@@ -66,33 +67,39 @@ pipeline {
                     sh "kubectl create namespace ${params.NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -"
                     
                     // Deploy theo thứ tự phù hợp
+                    echo "Deploying Config Server..."
                     sh """
                     cat k8s/templates/config-server.yaml | 
                     sed 's/\\${NAMESPACE}/${params.NAMESPACE}/g' | 
-                    sed 's/\\${DOCKER_USERNAME}/${DOCKER_USERNAME}/g' | 
+                    sed 's/\\${DOCKER_USERNAME}/${env.DOCKER_USERNAME}/g' | 
                     sed 's/\\${CONFIG_SERVER_TAG}/${env.CONFIG_SERVER_TAG}/g' > k8s/deploy-config-server.yaml
                     
                     kubectl apply -f k8s/deploy-config-server.yaml
                     """
                     
+                    echo "Waiting for Config Server to start..."
+                    sh "sleep 20"
+                    
+                    echo "Deploying Discovery Server..."
                     sh """
                     cat k8s/templates/discovery-server.yaml | 
                     sed 's/\\${NAMESPACE}/${params.NAMESPACE}/g' | 
-                    sed 's/\\${DOCKER_USERNAME}/${DOCKER_USERNAME}/g' | 
+                    sed 's/\\${DOCKER_USERNAME}/${env.DOCKER_USERNAME}/g' | 
                     sed 's/\\${DISCOVERY_SERVER_TAG}/${env.DISCOVERY_SERVER_TAG}/g' > k8s/deploy-discovery-server.yaml
                     
                     kubectl apply -f k8s/deploy-discovery-server.yaml
                     """
                     
-                    // Đợi để config và discovery server khởi động
-                    sh "sleep 30"
+                    echo "Waiting for Discovery Server to start..."
+                    sh "sleep 20"
                     
                     // Deploy các service khác
                     def deployService = { service, tag ->
+                        echo "Deploying ${service}..."
                         sh """
                         cat k8s/templates/${service}.yaml | 
                         sed 's/\\${NAMESPACE}/${params.NAMESPACE}/g' | 
-                        sed 's/\\${DOCKER_USERNAME}/${DOCKER_USERNAME}/g' | 
+                        sed 's/\\${DOCKER_USERNAME}/${env.DOCKER_USERNAME}/g' | 
                         sed 's/\\${${service.toUpperCase().replace('-', '_')}_TAG}/${tag}/g' > k8s/deploy-${service}.yaml
                         
                         kubectl apply -f k8s/deploy-${service}.yaml
@@ -104,8 +111,8 @@ pipeline {
                     deployService('visits-service', env.VISITS_SERVICE_TAG)
                     deployService('genai-service', env.GENAI_SERVICE_TAG)
                     
-                    // Đợi để các service khởi động
-                    sh "sleep 30"
+                    echo "Waiting for services to start..."
+                    sh "sleep 20"
                     
                     deployService('api-gateway', env.API_GATEWAY_TAG)
                     deployService('admin-server', env.ADMIN_SERVER_TAG)
