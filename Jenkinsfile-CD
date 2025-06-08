@@ -14,7 +14,7 @@ pipeline {
     }
     
     environment {
-        DOCKER_USERNAME = 'fatu29'  // Thay bằng username Docker Hub của bạn
+        DOCKER_USERNAME = 'fatu29'
     }
     
     stages {
