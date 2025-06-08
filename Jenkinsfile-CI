@@ -1,85 +1,103 @@
-// Jenkinsfile-CI
 pipeline {
     agent any
     
     environment {
-        DOCKER_USERNAME = credentials('dockerhub-credentials').username
-        COMMIT_HASH = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
-        BRANCH_NAME = sh(script: 'git rev-parse --abbrev-ref HEAD', returnStdout: true).trim()
+        DOCKER_USERNAME = 'fatu29'
+        // Sử dụng credentials chỉ để password
+        DOCKER_PASSWORD = credentials('dockerhub-password')
     }
     
     stages {
-        stage('Build Spring Apps') {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+        
+        stage('Build') {
             steps {
                 sh './mvnw clean package -DskipTests'
             }
         }
         
-        stage('Build Docker Images') {
+        stage('Determine Changes') {
             steps {
                 script {
+                    // Lấy branch name và commit ID
+                    env.BRANCH_NAME = sh(script: 'git rev-parse --abbrev-ref HEAD', returnStdout: true).trim()
+                    env.COMMIT_ID = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+                    
+                    // Xác định service thay đổi từ commit
+                    def changedFiles = sh(script: 'git diff --name-only HEAD~1 HEAD || git diff --name-only origin/main HEAD', returnStdout: true).trim()
+                    
+                    // Kiểm tra service nào thay đổi
+                    def serviceChanged = false
                     def services = ['config-server', 'discovery-server', 'api-gateway', 
-                                    'customers-service', 'vets-service', 'visits-service', 
-                                    'genai-service', 'admin-server']
+                                   'customers-service', 'vets-service', 'visits-service', 
+                                   'genai-service', 'admin-server']
                     
                     for (service in services) {
-                        dir("spring-petclinic-${service}") {
-                            // Tạo Dockerfile nếu chưa có
-                            if (!fileExists('Dockerfile')) {
-                                writeFile file: 'Dockerfile', text: '''FROM eclipse-temurin:17-jre
-WORKDIR /app
-COPY target/*.jar app.jar
-ENTRYPOINT ["java", "-jar", "app.jar"]
-'''
-                            }
-                            
-                            // Build và tag với commit hash
-                            sh """
-                            docker build -t ${DOCKER_USERNAME}/petclinic-${service}:${COMMIT_HASH} .
-                            """
-                            
-                            // Tag main/latest nếu đang ở nhánh main
-                            if (env.BRANCH_NAME == 'main') {
-                                sh """
-                                docker tag ${DOCKER_USERNAME}/petclinic-${service}:${COMMIT_HASH} ${DOCKER_USERNAME}/petclinic-${service}:latest
-                                """
-                            }
+                        if (changedFiles.contains("spring-petclinic-${service}")) {
+                            echo "Phát hiện thay đổi trong ${service}"
+                            env.SERVICE_NAME = service
+                            serviceChanged = true
                         }
+                    }
+                    
+                    if (!serviceChanged) {
+                        echo "Không phát hiện thay đổi trong các services, bỏ qua build"
+                        env.SERVICE_NAME = "none"
                     }
                 }
             }
         }
         
-        stage('Push to Docker Hub') {
+        stage('Build and Push Docker Image') {
+            when {
+                expression { return env.SERVICE_NAME != "none" }
+            }
             steps {
-                withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials', 
-                                passwordVariable: 'DOCKER_PASSWORD', 
-                                usernameVariable: 'DOCKER_USERNAME')]) {
+                script {
+                    def service = env.SERVICE_NAME
+                    def imageTag = env.COMMIT_ID
+                    
+                    // Đăng nhập Docker
                     sh 'echo $DOCKER_PASSWORD | docker login -u $DOCKER_USERNAME --password-stdin'
                     
-                    script {
-                        def services = ['config-server', 'discovery-server', 'api-gateway', 
-                                        'customers-service', 'vets-service', 'visits-service', 
-                                        'genai-service', 'admin-server']
-                        
-                        for (service in services) {
-                            // Push image với tag là commit hash
-                            sh "docker push ${DOCKER_USERNAME}/petclinic-${service}:${COMMIT_HASH}"
-                            
-                            // Push với tag latest nếu đang ở nhánh main
-                            if (env.BRANCH_NAME == 'main') {
-                                sh "docker push ${DOCKER_USERNAME}/petclinic-${service}:latest"
-                            }
-                        }
-                    }
+                    // Build và push Docker image
+                    sh """
+                    cd spring-petclinic-${service}
+                    
+                    # Tạo Dockerfile nếu chưa có
+                    if [ ! -f Dockerfile ]; then
+                        echo "FROM eclipse-temurin:17-jre
+WORKDIR /app
+COPY target/*.jar app.jar
+ENTRYPOINT [\"java\", \"-jar\", \"app.jar\"]" > Dockerfile
+                    fi
+                    
+                    # Build Docker image
+                    docker build -t ${DOCKER_USERNAME}/petclinic-${service}:${imageTag} .
+                    
+                    # Push lên Docker Hub
+                    docker push ${DOCKER_USERNAME}/petclinic-${service}:${imageTag}
+                    
+                    # Nếu là branch main, cũng gắn tag latest
+                    if [ "${env.BRANCH_NAME}" = "main" ]; then
+                        docker tag ${DOCKER_USERNAME}/petclinic-${service}:${imageTag} ${DOCKER_USERNAME}/petclinic-${service}:latest
+                        docker push ${DOCKER_USERNAME}/petclinic-${service}:latest
+                    fi
+                    """
+                    
+                    echo "Image đã push: ${DOCKER_USERNAME}/petclinic-${service}:${imageTag}"
                 }
             }
         }
-    }
-    
-    post {
-        always {
-            sh 'docker logout'
+        
+        stage('Cleanup') {
+            steps {
+                sh 'docker system prune -f || true'
+            }
         }
     }
 }
