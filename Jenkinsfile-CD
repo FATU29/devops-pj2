@@ -15,9 +15,23 @@ pipeline {
     
     environment {
         DOCKER_USERNAME = 'fatu29'
+        KUBECONFIG = '/var/lib/jenkins/.kube/config'
+        MINIKUBE_HOME = '/var/lib/jenkins/.minikube'
     }
     
     stages {
+        stage('Check Kubernetes Connection') {
+            steps {
+                script {
+                    echo "Testing Kubernetes connection..."
+                    sh "echo Using kubeconfig at \$KUBECONFIG"
+                    sh "kubectl version --client || true"
+                    sh "kubectl config view --minify || true"
+                    sh "kubectl get nodes || true"
+                }
+            }
+        }
+        
         stage('Determine Tags') {
             steps {
                 script {
