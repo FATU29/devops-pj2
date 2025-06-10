@@ -3,51 +3,73 @@ pipeline {
     
     environment {
         DOCKER_USERNAME = 'fatu29'
-        // Sử dụng credentials chỉ để password
-        DOCKER_PASSWORD = credentials('dockerhub-password')
+        DOCKER_PASSWORD = credentials('docker-password')
     }
     
     stages {
-        stage('Checkout') {
-            steps {
-                checkout scm
-            }
-        }
-        
-        stage('Build') {
-            steps {
-                sh './mvnw clean package -DskipTests'
-            }
-        }
-        
         stage('Determine Changes') {
             steps {
                 script {
-                    // Lấy branch name và commit ID
-                    env.BRANCH_NAME = sh(script: 'git rev-parse --abbrev-ref HEAD', returnStdout: true).trim()
-                    env.COMMIT_ID = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+                    // Lấy danh sách file đã thay đổi trong commit
+                    def changedFiles = sh(
+                        script: "git diff --name-only HEAD^ HEAD",
+                        returnStdout: true
+                    ).trim().split("\n")
                     
-                    // Xác định service thay đổi từ commit
-                    def changedFiles = sh(script: 'git diff --name-only HEAD~1 HEAD || git diff --name-only origin/main HEAD', returnStdout: true).trim()
-                    
-                    // Kiểm tra service nào thay đổi
-                    def serviceChanged = false
+                    // Danh sách các services cần kiểm tra
                     def services = ['config-server', 'discovery-server', 'api-gateway', 
                                    'customers-service', 'vets-service', 'visits-service', 
                                    'genai-service', 'admin-server']
                     
+                    def serviceChanged = false
+                    env.SERVICE_NAME = "none"
+                    
+                    // Kiểm tra xem có service nào thay đổi không
                     for (service in services) {
-                        if (changedFiles.contains("spring-petclinic-${service}")) {
-                            echo "Phát hiện thay đổi trong ${service}"
-                            env.SERVICE_NAME = service
-                            serviceChanged = true
+                        for (file in changedFiles) {
+                            if (file.startsWith("spring-petclinic-${service}/")) {
+                                serviceChanged = true
+                                env.SERVICE_NAME = service
+                                break
+                            }
                         }
+                        if (serviceChanged) break
                     }
                     
                     if (!serviceChanged) {
                         echo "Không phát hiện thay đổi trong các services, bỏ qua build"
-                        env.SERVICE_NAME = "none"
+                    } else {
+                        echo "Phát hiện thay đổi trong service: ${env.SERVICE_NAME}"
                     }
+                    
+                    // Lưu branch hiện tại
+                    env.BRANCH_NAME = sh(
+                        script: "git rev-parse --abbrev-ref HEAD",
+                        returnStdout: true
+                    ).trim()
+                    
+                    // Lưu commit ID
+                    env.COMMIT_ID = sh(
+                        script: "git rev-parse --short HEAD",
+                        returnStdout: true
+                    ).trim()
+                }
+            }
+        }
+        
+        stage('Build and Test') {
+            when {
+                expression { return env.SERVICE_NAME != "none" }
+            }
+            steps {
+                script {
+                    def service = env.SERVICE_NAME
+                    echo "Building service: ${service}"
+                    
+                    sh """
+                    cd spring-petclinic-${service}
+                    ./mvnw clean package -DskipTests
+                    """
                 }
             }
         }
@@ -78,26 +100,40 @@ ENTRYPOINT [\"java\", \"-jar\", \"app.jar\"]" > Dockerfile
                     
                     # Build Docker image
                     docker build -t ${DOCKER_USERNAME}/petclinic-${service}:${imageTag} .
+                    docker tag ${DOCKER_USERNAME}/petclinic-${service}:${imageTag} ${DOCKER_USERNAME}/petclinic-${service}:latest
                     
                     # Push lên Docker Hub
                     docker push ${DOCKER_USERNAME}/petclinic-${service}:${imageTag}
-                    
-                    # Nếu là branch main, cũng gắn tag latest
-                    if [ "${env.BRANCH_NAME}" = "main" ]; then
-                        docker tag ${DOCKER_USERNAME}/petclinic-${service}:${imageTag} ${DOCKER_USERNAME}/petclinic-${service}:latest
-                        docker push ${DOCKER_USERNAME}/petclinic-${service}:latest
-                    fi
+                    docker push ${DOCKER_USERNAME}/petclinic-${service}:latest
                     """
                     
-                    echo "Image đã push: ${DOCKER_USERNAME}/petclinic-${service}:${imageTag}"
+                    echo "Image đã được push: ${DOCKER_USERNAME}/petclinic-${service}:${imageTag}"
                 }
             }
         }
         
-        stage('Cleanup') {
-            steps {
-                sh 'docker system prune -f || true'
+        // Thêm stage mới để tự động kích hoạt CD
+        stage('Trigger CD') {
+            when {
+                expression { return env.SERVICE_NAME != "none" }
             }
+            steps {
+                script {
+                    // Tải script auto-cd.groovy và thực thi
+                    def autoCD = load 'scripts/auto-cd.groovy'
+                    autoCD.triggerCDFromCI(env.SERVICE_NAME, env.BRANCH_NAME)
+                    echo "Đã kích hoạt CD pipeline cho service ${env.SERVICE_NAME} từ branch ${env.BRANCH_NAME}"
+                }
+            }
+        }
+    }
+    
+    post {
+        success {
+            echo "CI Pipeline hoàn thành thành công!"
+        }
+        failure {
+            echo "CI Pipeline thất bại!"
         }
     }
 }
