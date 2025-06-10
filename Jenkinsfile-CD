@@ -110,7 +110,16 @@ pipeline {
         stage('Get Access Information') {
             steps {
                 script {
-                    def nodeIP = sh(script: 'sudo -u fat minikube ip', returnStdout: true).trim()
+                    def nodeIP = sh(
+    script: "kubectl get node -o jsonpath='{.items[0].status.addresses[?(@.type==\"InternalIP\")].address}'",
+    returnStdout: true
+).trim()
+
+def nodePort = sh(
+    script: "kubectl get svc api-gateway -n ${params.NAMESPACE} -o jsonpath='{.spec.ports[0].nodePort}'",
+    returnStdout: true
+).trim()
+
                     echo "=========================================================="
                     echo "Application deployed successfully!"
                     echo "Access the application at: http://${nodeIP}:30080"
