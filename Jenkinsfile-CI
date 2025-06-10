@@ -10,7 +10,7 @@ pipeline {
         stage('Determine Changes') {
             steps {
                 script {
-                    // Lấy danh sách file đã thay đổi trong commit
+                    // Lấy a danh sách file đã thay đổi trong commit
                     def changedFiles = sh(
                         script: "git diff --name-only HEAD^ HEAD",
                         returnStdout: true
