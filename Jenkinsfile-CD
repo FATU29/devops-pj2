@@ -110,7 +110,7 @@ pipeline {
         stage('Get Access Information') {
             steps {
                 script {
-                    def nodeIP = sh(script: 'minikube ip', returnStdout: true).trim()
+                    def nodeIP = sh(script: 'sudo -u fat minikube ip', returnStdout: true).trim()
                     echo "=========================================================="
                     echo "Application deployed successfully!"
                     echo "Access the application at: http://${nodeIP}:30080"
