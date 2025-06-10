@@ -11,7 +11,7 @@
 /**
  * Kích hoạt CD job với tham số phù hợp
  * @param serviceName Tên service thay đổi (config-server, vets-service, etc.)
- * @param branchName Tên branch đang build
+ * @param branchName Tên branch đang build tesst
  */
 def triggerCDFromCI(String serviceName, String branchName) {
     echo "Chuẩn bị kích hoạt CD cho service: ${serviceName} từ branch: ${branchName}"
